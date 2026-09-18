@@ -555,6 +555,82 @@ if [ -n "${ANDROID_PRODUCT_OUT}" ] && [ -n "${ANDROID_BUILD_TOP}" ]; then
 
   ################################################################################
   echo
+  echo "  Compiling Oplus external kernel modules"
+
+  if [ -f "${ROOT_DIR}/oplus/bazel/oplus_modules_variant.sh" ]; then
+    ${ROOT_DIR}/oplus/bazel/oplus_modules_variant.sh "${KERNEL_TARGET}" "${KERNEL_VARIANT}" "${OPLUS_FEATURES}"
+  fi
+
+  if [ -f "${ROOT_DIR}/oplus/config/modules.ext.oplus" ]; then
+    for project in $(cat "${ROOT_DIR}/oplus/config/modules.ext.oplus"); do
+      rel_module_path="${project#../}"
+      if [ ! -d "${ANDROID_BUILD_TOP}/${rel_module_path}" ]; then
+        echo "Module ${project} does not exist, skipping..."
+        continue
+      fi
+
+      echo "Building ${project}"
+      (
+        cd ${ROOT_DIR}
+        set -x
+        OUT_DIR=${ANDROID_EXT_MODULES_OUT} \
+        EXT_MODULES="${KP_TO_ANDROID}/${rel_module_path}" \
+        KERNEL_KIT=${ANDROID_KERNEL_OUT} \
+        ./build/build_module.sh
+        set +x
+      )
+    done
+  fi
+
+  ################################################################################
+  # Stage newly built Oplus DLKMs into dist/ and route to vendor_boot vs vendor_dlkm
+  OPLUS_DLKM_SRC="${ANDROID_EXT_MODULES_COMMON_OUT}/vendor/oplus"
+
+  if [ -d "${OPLUS_DLKM_SRC}" ]; then
+      echo "  Staging Oplus DLKMs from ${OPLUS_DLKM_SRC} to dist/ and staging tree"
+      find "${OPLUS_DLKM_SRC}" -name "*.ko" -exec cp {} "${ANDROID_KP_OUT_DIR}/dist/" \;
+      find "${OPLUS_DLKM_SRC}" -name "*.ko" -printf "%f\n" > "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_all"
+
+      if [ -f "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus" ]; then
+          cat "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_all" "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus" | sort | uniq -u > "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm"
+
+          # 1. Update load lists in dist
+          if [ -e "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load" ]; then
+              cat "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm" >> "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load"
+          fi
+
+          if [ -e "${ANDROID_KP_OUT_DIR}/dist/modules.load" ]; then
+              cat "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus" >> "${ANDROID_KP_OUT_DIR}/dist/modules.load"
+          fi
+
+          # 2. Stage directly into ${ANDROID_KERNEL_OUT}
+          # First-stage (vendor_boot / ramdisk): touch, synaptics, uff_fp
+          while IFS= read -r mod; do
+              [ -z "$mod" ] && continue
+              src_ko=$(find "${ANDROID_KP_OUT_DIR}/dist/" -name "$mod" -print -quit)
+              if [ -n "$src_ko" ]; then
+                  cp "$src_ko" "${ANDROID_KERNEL_OUT}/"
+              fi
+          done < "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus"
+
+          # Second-stage (vendor_dlkm): all other oplus modules
+          mkdir -p "${ANDROID_KERNEL_OUT}/vendor_dlkm"
+          while IFS= read -r mod; do
+              [ -z "$mod" ] && continue
+              src_ko=$(find "${ANDROID_KP_OUT_DIR}/dist/" -name "$mod" -print -quit)
+              if [ -n "$src_ko" ]; then
+                  cp "$src_ko" "${ANDROID_KERNEL_OUT}/vendor_dlkm/"
+              fi
+          done < "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm"
+
+          # Sync updated load lists to ANDROID_KERNEL_OUT
+          [ -e "${ANDROID_KP_OUT_DIR}/dist/modules.load" ] && cp "${ANDROID_KP_OUT_DIR}/dist/modules.load" "${ANDROID_KERNEL_OUT}/modules.load"
+          [ -e "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load" ] && cp "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load" "${ANDROID_KERNEL_OUT}/vendor_dlkm/modules.load"
+      fi
+  fi
+
+  ################################################################################
+  echo
   echo "  Merging vendor devicetree overlays"
 
   rm -rf ${ANDROID_KERNEL_OUT}/dtbs
