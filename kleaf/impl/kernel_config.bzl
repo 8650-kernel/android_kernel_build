@@ -128,6 +128,66 @@ def _config_gcov(ctx):
     ]
     return struct(configs = configs, deps = [])
 
+def _config_kernel_module_coverage(ctx):
+    """Return configs for KERNEL MODULE COVERAGE.
+
+    Args:
+        ctx: ctx
+    Returns:
+        A struct, where `configs` is a list of arguments to `scripts/config`,
+        and `deps` is a list of input files.
+    """
+    kocov = ctx.attr.kocov[BuildSettingInfo].value
+
+    if not kocov:
+        return struct(configs = [], deps = [])
+
+    # for fix ERROR: modpost: "llvm_gcda_start_file" [*.ko] undefined!
+    if trim_nonlisted_kmi_utils.get_value(ctx):
+        fail("{}: --kocov requires trimming to be disabled".format(ctx.label))
+
+    configs = [
+        _config.enable("KCOV"),
+        _config.enable("KCOV_ENABLE_COMPARISONS"),
+        _config.enable("GCOV_KERNEL"),
+        # TODO(b/291710318) Allow section mismatch when using GCOV_PROFILE_ALL
+        #  modpost: vmlinux.o: section mismatch in reference: cpumask_andnot (section: .text) -> efi_systab_phys (section: .init.data)
+        _config.enable("SECTION_MISMATCH_WARN_ONLY"),
+        # TODO: Re-enable when https://github.com/ClangBuiltLinux/linux/issues/1778 is fixed.
+        _config.disable("CFI_CLANG"),
+    ]
+    return struct(configs = configs, deps = [])
+
+def _config_pgo(ctx):
+    """Return configs for PGO.
+
+    Args:
+        ctx: ctx
+    Returns:
+        A struct, where `configs` is a list of arguments to `scripts/config`,
+        and `deps` is a list of input files.
+    """
+    pgo_flag = ctx.attr.pgo[BuildSettingInfo].value
+
+    pgo_configs = []
+    if pgo_flag == "inst":
+        pgo_configs += [
+            _config.enable("ARCH_SUPPORTS_PGO_CLANG"),
+            _config.enable("PGO_CLANG"),
+        ]
+    elif pgo_flag == "pgo":
+        pgo_configs += [
+            _config.enable("ARCH_SUPPORTS_PGO_CLANG"),
+            _config.disable("PGO_CLANG"),
+        ]
+    else:
+        pgo_configs += [
+            _config.disable("ARCH_SUPPORTS_PGO_CLANG"),
+            _config.disable("PGO_CLANG"),
+        ]
+
+    return struct(configs = pgo_configs, deps = [])
+
 def _config_lto(ctx):
     """Return configs for LTO.
 
@@ -273,12 +333,15 @@ def _config_kasan(ctx):
 
     configs = [
         _config.enable("KASAN"),
-        _config.enable("KASAN_INLINE"),
+        _config.enable("KASAN_OUTLINE"),
+        _config.enable("KASAN_STACK"),
         _config.enable("KCOV"),
+        _config.enable("KCOV_ENABLE_COMPARISONS"),
         _config.enable("PANIC_ON_WARN_DEFAULT_ENABLE"),
         _config.disable("RANDOMIZE_BASE"),
-        _config.disable("KASAN_OUTLINE"),
         _config.set_val("FRAME_WARN", 0),
+        _config.disable("KASAN_HW_TAGS"),
+        _config.disable("CFI_CLANG"),
         _config.disable("SHADOW_CALL_STACK"),
     ]
     return struct(configs = configs, deps = [])
@@ -348,8 +411,10 @@ def _config_kcsan(ctx):
         _config.disable("KASAN"),
         _config.disable("KASAN_STACK"),
         _config.enable("PANIC_ON_WARN_DEFAULT_ENABLE"),
+        _config.disable("KCSAN_REPORT_RACE_UNKNOWN_ORIGIN"),
         _config.disable("RANDOMIZE_BASE"),
         _config.set_val("FRAME_WARN", 0),
+        _config.set_val("KCSAN_SKIP_WATCH", 20000),
         _config.disable("KASAN_HW_TAGS"),
         _config.disable("CFI"),
         _config.disable("CFI_PERMISSIVE"),
@@ -373,6 +438,8 @@ def _reconfig(ctx):
         _config_kasan,
         _config_kasan_sw_tags,
         _config_gcov,
+        _config_kernel_module_coverage,
+        _config_pgo,
         _config_keys,
         kgdb.get_scripts_config_args,
     ):
@@ -668,6 +735,9 @@ kernel_config = rule(
         "defconfig_fragments": attr.label_list(
             doc = "defconfig fragments",
             allow_files = True,
+        ),
+        "rewrite_absolute_paths_in_config": attr.bool(
+            doc = "rewrite absolute paths in .config as relative paths",
         ),
         "_write_depset": attr.label(
             default = "//build/kernel/kleaf/impl:write_depset",
