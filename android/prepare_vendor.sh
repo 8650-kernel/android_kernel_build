@@ -596,11 +596,21 @@ if [ -n "${ANDROID_PRODUCT_OUT}" ] && [ -n "${ANDROID_BUILD_TOP}" ]; then
 
           # 1. Update load lists in dist
           if [ -e "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load" ]; then
-              cat "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm" >> "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load"
+              cat \
+                  "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load" \
+                  "${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm" |
+                  awk '!seen[$0]++' > "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load.tmp" &&
+              mv "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load.tmp" \
+                 "${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load"
           fi
 
           if [ -e "${ANDROID_KP_OUT_DIR}/dist/modules.load" ]; then
-              cat "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus" >> "${ANDROID_KP_OUT_DIR}/dist/modules.load"
+              cat \
+                  "${ANDROID_KP_OUT_DIR}/dist/modules.load" \
+                  "${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus" |
+                  awk '!seen[$0]++' > "${ANDROID_KP_OUT_DIR}/dist/modules.load.tmp" &&
+              mv "${ANDROID_KP_OUT_DIR}/dist/modules.load.tmp" \
+                 "${ANDROID_KP_OUT_DIR}/dist/modules.load"
           fi
 
           # 2. Stage directly into ${ANDROID_KERNEL_OUT}
