@@ -288,6 +288,18 @@ for EXT_MOD in ${EXT_MODULES}; do
     fi
   done
 
+  set +e
+  grep_string='vendor/oplus'
+  oplus_kernel_module=$(echo ${module_path} | grep "${grep_string}")
+  echo "oplus_kernel_module is  $oplus_kernel_module"
+  if [[ "${oplus_kernel_module}" != "" ]]
+  then
+      echo "$grep_string is in $module_path default check bazel build "
+  else
+      echo "$grep_string in not in $module_path use default"
+  fi
+  set -e
+
   if [ "$TARGET_BOARD_PLATFORM" = "msmnile" ]; then
      btgt="gen3auto"
   elif [ "$TARGET_BOARD_PLATFORM" = "sm6150" ]; then
@@ -308,7 +320,7 @@ for EXT_MOD in ${EXT_MODULES}; do
   filter_regex="${btgt/_/-}_${VARIANT/_/-}_${SUBTARGET_REGEX:-.*}_dist$"
 
   # Query for a target that matches the pattern for module distribution
-  if [ "$ENABLE_DDK_BUILD" = "true" ] \
+  if [[ "$ENABLE_DDK_BUILD" = "true" || "$oplus_kernel_module" != "" ]] \
      && [ -n "$pkg_path" ] \
      && [ -n "$btgt" ] \
      && build_target=$(./tools/bazel query --ui_event_filters=-info --noshow_progress \
@@ -336,6 +348,10 @@ for EXT_MOD in ${EXT_MODULES}; do
     if [ "$ALLOW_UNSAFE_DDK_HEADERS" = "true" ]; then
       build_flags+=("--allow_ddk_unsafe_headers")
     fi
+    if [ "$ENABLE_DDK_BUILD" = "true" ]; then
+      build_flags+=("--sandbox_writable_path=/tmp")
+    fi
+    # end /tmp permission for bazel
 
     if [ -n "$EXTRA_DDK_ARGS" ]; then
       IFS=" " read -r -a extra_args <<< "$EXTRA_DDK_ARGS"
@@ -348,8 +364,7 @@ for EXT_MOD in ${EXT_MODULES}; do
 
     # The Module.symvers file is named "<target>_<variant>_Modules.symvers, but other modules are
     # looking for just "Module.symvers". Concatenate any of them into one Module.symvers file.
-    cat "${OUT_DIR}/${EXT_MOD_REL}/${btgt}_${VARIANT}"_*_Module.symvers \
-      > "${OUT_DIR}/${EXT_MOD_REL}/Module.symvers"
+    cat "${OUT_DIR}/${EXT_MOD_REL}"/*_Module.symvers > "${OUT_DIR}/${EXT_MOD_REL}/Module.symvers"
 
     # Intermediate directories aren't generated automatically, so we need to create them manually
     if [ -n "$INTERMEDIATE_DIR" ]; then

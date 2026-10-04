@@ -91,6 +91,10 @@
 
 set -e
 
+EXTRA_KBUILD_ARGS="--skip abl"
+
+OUT_DIR=""
+
 # rel_path <to> <from>
 # Generate relative directory path to reach directory <to> from <from>
 function rel_path() {
@@ -264,6 +268,12 @@ if [ "${RECOMPILE_KERNEL}" == "1" -o "${COPY_NEEDED}" == "1" ]; then
 fi
 
 ################################################################################
+# Read environment variables and write to bzl file
+OPLUS_FEATURES=$(export|grep -e "^declare -x OPLUS_FEATURE_BSP_"|sed 's/declare -x //g'|sed 's/"//g'|tr '\n' ' ')
+# setup build parameters before building external modules
+./kernel_platform/oplus/bazel/oplus_modules_variant.sh ${KERNEL_TARGET} ${KERNEL_VARIANT} "${OPLUS_FEATURES}"
+
+################################################################################
 if [ "${RECOMPILE_KERNEL}" == "1" ]; then
   echo
   echo "  Recompiling kernel"
@@ -293,11 +303,11 @@ fi
 
 if [ ! -e "${ANDROID_ABL_OUT_DIR}/abl-${TARGET_BUILD_VARIANT}/${ABL_IMAGE}" ] || \
     ! diff -q "${ANDROID_ABL_OUT_DIR}/abl-${TARGET_BUILD_VARIANT}/${ABL_IMAGE}" \
-  "${ANDROID_KP_OUT_DIR}/dist/${DIST_ABL_IMAGE}" ; then
+  "${ANDROID_KP_OUT_DIR}/abl/unsigned_abl_${TARGET_BUILD_VARIANT}.elf" ; then
   COPY_ABL_NEEDED=1
 fi
 
-if [ ! -e "${ANDROID_KP_OUT_DIR}/dist/${DIST_ABL_IMAGE}" ] && \
+if [ ! -e "${ANDROID_KP_OUT_DIR}/abl/unsigned_abl_${TARGET_BUILD_VARIANT}.elf" ] && \
    [ "${COPY_ABL_NEEDED}" == "1" ]; then
   RECOMPILE_ABL=1
 fi
@@ -317,11 +327,52 @@ if [ "${RECOMPILE_ABL}" == "1" ] && [ -n "${TARGET_BUILD_VARIANT}" ] && \
       ./tools/bazel run \
         --"//bootable/bootloader/edk2:target_build_variant=${TARGET_BUILD_VARIANT}" \
         "//msm-kernel:${KERNEL_TARGET}_${KERNEL_VARIANT}_abl_dist" \
-        -- --destdir "${ANDROID_KP_OUT_DIR}/dist"
+        -- --destdir "${ANDROID_KP_OUT_DIR}/abl"
     )
 
   COPY_ABL_NEEDED=1
 fi
+
+##################################oplus mixed build##########################################
+
+for file in Image vmlinux System.map .config Module.symvers build_opts.txt; do
+    cp ${ANDROID_KP_OUT_DIR}/dist/${file} ${ANDROID_KERNEL_OUT}/
+done
+
+echo
+echo "   build oplus external modules : ${CHIPSET_COMPANY}"
+(
+    cd ${ROOT_DIR}
+    set -x
+
+    if [[ -f "oplus/config/modules.ext.oplus" && "$(cat oplus/config/modules.ext.oplus | wc -l)" -gt 0 ]]; then
+        # setup build parameters before building external modules
+        ./oplus/bazel/oplus_modules_variant.sh \
+            ${KERNEL_TARGET} ${KERNEL_VARIANT} "${OPLUS_FEATURES}"
+
+        export CONFIG_OPLUS_FEATURE_MIXED_BUILD="y"
+        export CONFIG_OPLUS_FEATURE_MIXED_VND=${CHIPSET_COMPANY}
+
+        KBUILD_OPTIONS+=("CHIPSET_COMPANY=${CHIPSET_COMPANY}")
+        KBUILD_OPTIONS+=("OPLUS_VND_BUILD_PLATFORM=${OPLUS_VND_BUILD_PLATFORM}")
+        KBUILD_OPTIONS+=("OPLUS_FEATURE_BSP_DRV_VND_INJECT_TEST=${OPLUS_FEATURE_BSP_DRV_VND_INJECT_TEST}")
+
+        if [ -z "${EXT_MODULES}" ]; then
+            EXT_MODULES=$(cat oplus/config/modules.ext.oplus)
+        fi
+
+        EXT_MODULES=$EXT_MODULES \
+        KBUILD_OPTIONS=${KBUILD_OPTIONS[@]} \
+        OUT_DIR=${ANDROID_EXT_MODULES_OUT} \
+        KERNEL_KIT=${ANDROID_KERNEL_OUT} \
+        ./build/build_module.sh
+    fi
+)
+
+EXT_MODULES=""
+COPY_NEEDED=1
+
+##########################oplus add mixed build#############################################
 
 ################################################################################
 if [ "${COPY_NEEDED}" == "1" ]; then
@@ -332,6 +383,25 @@ if [ "${COPY_NEEDED}" == "1" ]; then
 
   echo
   echo "  Preparing prebuilt folder ${ANDROID_KERNEL_OUT}"
+  #build kernel will delete ${ANDROID_KP_OUT_DIR}/dist/ and lost oplus DDK ko
+  #so move oplus module copy here
+  set -x
+  echo "mixedbuild oplus module copy"
+  # copy oplus external modules to dist directory and append to the end of the vendor_dlkm.modules.load
+  if [ -d ${ANDROID_KP_OUT_DIR}/../vendor/oplus ]; then
+      find ${ANDROID_KP_OUT_DIR}/../vendor/oplus -name "*.ko" | xargs -i cp {} ${ANDROID_KP_OUT_DIR}/dist/
+      find ${ANDROID_KP_OUT_DIR}/../vendor/oplus -name "*.ko" -printf "%f\n" > ${ANDROID_KP_OUT_DIR}/dist/oplus_modules_all
+      cat ${ANDROID_KP_OUT_DIR}/dist/oplus_modules_all ${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus | sort | uniq -u > ${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm
+
+      if [ -e ${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load ]; then
+         cat ${ANDROID_KP_OUT_DIR}/dist/oplus_modules_vendor_dlkm  >> ${ANDROID_KP_OUT_DIR}/dist/vendor_dlkm.modules.load
+      fi
+
+      if [ -e ${ANDROID_KP_OUT_DIR}/dist/modules.load ]; then
+        cat ${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus >> ${ANDROID_KP_OUT_DIR}/dist/modules.load
+      fi
+  fi
+  set +x
 
   first_stage_kos=$(mktemp)
   if [ -e ${ANDROID_KP_OUT_DIR}/dist/modules.load ]; then
@@ -476,12 +546,12 @@ if [ "${COPY_ABL_NEEDED}" == "1" ]; then
       file_list="LinuxLoader_${variant}.debug unsigned_abl_${variant}.elf"
     fi
     for file in ${file_list}; do
-      if [ -e ${ANDROID_KP_OUT_DIR}/dist/${file} ]; then
+      if [ -e ${ANDROID_KP_OUT_DIR}/abl/${file} ]; then
         if [ ! -e "${ANDROID_ABL_OUT_DIR}/abl-${variant}" ]; then
           mkdir -p ${ANDROID_ABL_OUT_DIR}/abl-${variant}
         fi
         FILE_NAME=$(echo ${file} | sed 's/_'${variant}'//g')
-        cp ${ANDROID_KP_OUT_DIR}/dist/${file} ${ANDROID_ABL_OUT_DIR}/abl-${variant}/${FILE_NAME}
+        cp ${ANDROID_KP_OUT_DIR}/abl/${file} ${ANDROID_ABL_OUT_DIR}/abl-${variant}/${FILE_NAME}
       fi
     done
   done
@@ -615,3 +685,8 @@ fi
 
 # remove bazel dir to avoid build issues
 rm -rf ${ANDROID_BUILD_TOP}/kernel_platform/out/bazel
+
+if [ ! -d "${ANDROID_BUILD_TOP}/out" ];then
+    mkdir -p ${ANDROID_BUILD_TOP}/out
+fi
+cp -r ${ANDROID_KP_OUT_DIR}/* ${ANDROID_BUILD_TOP}/out/
