@@ -100,6 +100,11 @@ function rel_path() {
 ROOT_DIR=$($(dirname $(readlink -f $0))/../gettop.sh)
 echo "  kernel platform root: $ROOT_DIR"
 
+export EXTRA_KBUILD_ARGS="--skip abl"
+export CHIPSET_COMPANY=QCOM
+export OPLUS_VND_BUILD_PLATFORM=SM8650
+export TARGET_BOARD_PLATFORM=pineapple
+
 # Merge vendor devicetree overlays
 
 if [ "$1" == "dtb-only" ]; then
@@ -337,7 +342,6 @@ if [ "${RECOMPILE_ABL}" == "1" ] && [ -n "${TARGET_BUILD_VARIANT}" ] && \
 
       ./tools/bazel run \
         --"//bootable/bootloader/edk2:target_build_variant=${TARGET_BUILD_VARIANT}" \
-        --"//bootable/bootloader/edk2:oplus_vnd_build_platform=${OPLUS_VND_BUILD_PLATFORM}" \
         "//msm-kernel:${KERNEL_TARGET}_${KERNEL_VARIANT}_abl_dist" \
         -- --dist_dir "${ANDROID_KP_OUT_DIR}/abl"
     )
