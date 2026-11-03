@@ -80,6 +80,8 @@
 #   RECOMPILE_KERNEL   - Recompile the kernel platform
 #   RECOMPILE_EXT_MODULE, RECOMPILE_TECHPACK_DTBO, RECOMPILE_MERGE_DTBS
 #                      - Set to 0 to skip the corresponding vendor build step.
+#   DTBO_TARGET        - Oplus project name (e.g. avalon) to pack into dtbs/dtbo.img.
+#                        Required when the merged overlays contain multiple Oplus projects.
 #   LTO                - Specify Link-Time Optimization level. See LTO_VALUES in kleaf/constants.bzl
 #                        for list of valid values.
 #   EXTRA_KBUILD_ARGS  - Arguments to pass to kernel build (build_with_bazel.py)

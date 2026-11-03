@@ -102,5 +102,15 @@ function dtbo_pack_by_proj_name(){
 }
 dtbo_pack_by_proj_name ${3}
 [[ -n "$(find ${3} -type f -name '*.dtb')" ]] && cat ${3}/*.dtb > ${3}/dtb.img
-[[ -n "$(find ${3} -type f -name '*dtbo.img')" ]] && (img=($(find ${3} -type f -name '*dtbo.img'));cp ${img[0]} ${3}/dtbo.img)
+shopt -s nullglob
+img=("${3}"/*-dtbo.img)
+if [[ ${#img[@]} -eq 0 ]]; then
+	[[ -n "$(find ${3} -type f -name '*.dtbo')" ]] && mkdtboimg create ${3}/dtbo.img --page_size=${PAGE_SIZE} ${3}/*.dtbo
+	exit 0
+fi
+if [[ -n "${DTBO_TARGET}" ]]; then
+	img=("${3}/${DTBO_TARGET}-"*-dtbo.img)
+fi
+[[ ${#img[@]} -eq 1 ]] || { echo "Set DTBO_TARGET to a project with a generated DTBO image." >&2; exit 1; }
+cp "${img[0]}" "${3}/dtbo.img"
 exit 0
