@@ -78,6 +78,8 @@
 #                        $ANDROID_BUILD_TOP/out/$BRANCH and $KP_ROOT_DIR/out/$BRANCH
 #   DIST_DIR           - Kernel Platform dist folder for the KERNEL_TARGET and KERNEL_VARIANT
 #   RECOMPILE_KERNEL   - Recompile the kernel platform
+#   RECOMPILE_EXT_MODULE, RECOMPILE_TECHPACK_DTBO, RECOMPILE_MERGE_DTBS
+#                      - Set to 0 to skip the corresponding vendor build step.
 #   LTO                - Specify Link-Time Optimization level. See LTO_VALUES in kleaf/constants.bzl
 #                        for list of valid values.
 #   EXTRA_KBUILD_ARGS  - Arguments to pass to kernel build (build_with_bazel.py)
@@ -264,6 +266,13 @@ if [ "${RECOMPILE_KERNEL}" == "1" -o "${COPY_NEEDED}" == "1" ]; then
 fi
 
 ################################################################################
+# Configure the Oplus Bazel targets when the vendor tree is present.
+if [ -x "${ROOT_DIR}/oplus/bazel/oplus_modules_variant.sh" ]; then
+  OPLUS_FEATURES=$(export -p | sed -n 's/^declare -x \(OPLUS_FEATURE_BSP_.*\)/\1/p' | tr -d '"' | tr '\n' ' ')
+  "${ROOT_DIR}/oplus/bazel/oplus_modules_variant.sh" "${KERNEL_TARGET}" "${KERNEL_VARIANT}" "${OPLUS_FEATURES}"
+fi
+
+################################################################################
 if [ "${RECOMPILE_KERNEL}" == "1" ]; then
   echo
   echo "  Recompiling kernel"
@@ -324,6 +333,29 @@ if [ "${RECOMPILE_ABL}" == "1" ] && [ -n "${TARGET_BUILD_VARIANT}" ] && \
 fi
 
 ################################################################################
+if [ "${RECOMPILE_EXT_MODULE}" != "0" ] && [ -s "${ROOT_DIR}/oplus/config/modules.ext.oplus" ]; then
+  cp "${ANDROID_KP_OUT_DIR}/dist/"{Image,vmlinux,System.map,.config,Module.symvers,build_opts.txt} \
+    "${ANDROID_KERNEL_OUT}/"
+  echo
+  echo "  Building Oplus external modules"
+  (
+    cd "${ROOT_DIR}"
+    export CONFIG_OPLUS_FEATURE_MIXED_BUILD=y
+    export CONFIG_OPLUS_FEATURE_MIXED_VND="${CHIPSET_COMPANY}"
+    KBUILD_OPTIONS+=("CHIPSET_COMPANY=${CHIPSET_COMPANY}")
+    KBUILD_OPTIONS+=("OPLUS_VND_BUILD_PLATFORM=${OPLUS_VND_BUILD_PLATFORM}")
+    KBUILD_OPTIONS+=("OPLUS_FEATURE_BSP_DRV_VND_INJECT_TEST=${OPLUS_FEATURE_BSP_DRV_VND_INJECT_TEST}")
+    EXT_MODULES="${EXT_MODULES:-$(cat oplus/config/modules.ext.oplus)}" \
+    KBUILD_OPTIONS=${KBUILD_OPTIONS[@]} \
+    OUT_DIR=${ANDROID_KP_OUT_DIR} \
+    KERNEL_KIT=${ANDROID_KERNEL_OUT} \
+    ./build/build_module.sh
+  )
+  EXT_MODULES=""
+  COPY_NEEDED=1
+fi
+
+################################################################################
 if [ "${COPY_NEEDED}" == "1" ]; then
   if [ ! -e "${ANDROID_KP_OUT_DIR}" ]; then
     echo "!! kernel platform output directory doesn't exist. Bad path or output wasn't copied?"
@@ -332,6 +364,24 @@ if [ "${COPY_NEEDED}" == "1" ]; then
 
   echo
   echo "  Preparing prebuilt folder ${ANDROID_KERNEL_OUT}"
+
+  # Stage Oplus modules after the kernel build has populated dist.
+  oplus_modules_dir="${ANDROID_KP_OUT_DIR}/../vendor/oplus"
+  oplus_vendor_boot="${ROOT_DIR}/oplus/config/modules.vendor_boot.list.oplus"
+  if [ -d "${oplus_modules_dir}" ] && [ -f "${oplus_vendor_boot}" ]; then
+    dist="${ANDROID_KP_OUT_DIR}/dist"
+    find "${oplus_modules_dir}" -name '*.ko' -exec cp -t "${dist}" {} +
+    oplus_modules=$(find "${oplus_modules_dir}" -name '*.ko' -printf '%f\n' | sort -u)
+    if [ -f "${dist}/vendor_dlkm.modules.load" ]; then
+      awk 'FILENAME != "-" { seen[$0] = 1; next } NF && !seen[$0]++' \
+        "${oplus_vendor_boot}" "${dist}/vendor_dlkm.modules.load" - \
+        <<< "${oplus_modules}" >> "${dist}/vendor_dlkm.modules.load"
+    fi
+    if [ -f "${dist}/modules.load" ]; then
+      awk 'FILENAME != "-" { seen[$0] = 1; next } NF && !seen[$0]++' \
+        "${dist}/modules.load" - < "${oplus_vendor_boot}" >> "${dist}/modules.load"
+    fi
+  fi
 
   first_stage_kos=$(mktemp)
   if [ -e ${ANDROID_KP_OUT_DIR}/dist/modules.load ]; then
@@ -572,6 +622,7 @@ if [ -n "${ANDROID_PRODUCT_OUT}" ] && [ -n "${ANDROID_BUILD_TOP}" ]; then
     set +x
   )
 
+if [ "${RECOMPILE_TECHPACK_DTBO}" != "0" ]; then
   ################################################################################
   echo
   echo "  Compiling vendor devicetree overlays"
@@ -595,7 +646,9 @@ if [ -n "${ANDROID_PRODUCT_OUT}" ] && [ -n "${ANDROID_BUILD_TOP}" ]; then
       set +x
     )
   done
+fi
 
+if [ "${RECOMPILE_MERGE_DTBS}" != "0" ]; then
   ################################################################################
   echo
   echo "  Merging vendor devicetree overlays"
@@ -610,6 +663,7 @@ if [ -n "${ANDROID_PRODUCT_OUT}" ] && [ -n "${ANDROID_BUILD_TOP}" ]; then
       ${ANDROID_EXT_MODULES_COMMON_OUT} \
       ${ANDROID_KERNEL_OUT}/dtbs
   )
+fi
 fi
 fi
 

@@ -308,7 +308,7 @@ for EXT_MOD in ${EXT_MODULES}; do
   filter_regex="${btgt/_/-}_${VARIANT/_/-}_${SUBTARGET_REGEX:-.*}_dist$"
 
   # Query for a target that matches the pattern for module distribution
-  if [ "$ENABLE_DDK_BUILD" = "true" ] \
+  if [[ "$ENABLE_DDK_BUILD" = "true" || "$module_path" == vendor/oplus/* ]] \
      && [ -n "$pkg_path" ] \
      && [ -n "$btgt" ] \
      && build_target=$(./tools/bazel query --ui_event_filters=-info --noshow_progress \
@@ -348,8 +348,12 @@ for EXT_MOD in ${EXT_MODULES}; do
 
     # The Module.symvers file is named "<target>_<variant>_Modules.symvers, but other modules are
     # looking for just "Module.symvers". Concatenate any of them into one Module.symvers file.
-    cat "${OUT_DIR}/${EXT_MOD_REL}/${btgt}_${VARIANT}"_*_Module.symvers \
-      > "${OUT_DIR}/${EXT_MOD_REL}/Module.symvers"
+    if [[ "$module_path" == vendor/oplus/* ]]; then
+      cat "${OUT_DIR}/${EXT_MOD_REL}"/*_Module.symvers > "${OUT_DIR}/${EXT_MOD_REL}/Module.symvers"
+    else
+      cat "${OUT_DIR}/${EXT_MOD_REL}/${btgt}_${VARIANT}"_*_Module.symvers \
+        > "${OUT_DIR}/${EXT_MOD_REL}/Module.symvers"
+    fi
 
     # Intermediate directories aren't generated automatically, so we need to create them manually
     if [ -n "$INTERMEDIATE_DIR" ]; then
