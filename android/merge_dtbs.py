@@ -551,6 +551,7 @@ def main():
 	parser.add_argument('-b', '--base', required=True, help="Folder containing base DTBs from Kernel Platform output")
 	parser.add_argument('-t', '--techpack', required=True, help="Folder containing techpack DLKM DTBOs")
 	parser.add_argument('-o', '--out', required=True, help="Output folder where merged DTBs will be saved")
+	parser.add_argument('--target', help="Merge only the named Oplus project and its compatible base DTBs")
 	parser.add_argument('--loglevel', choices=['debug', 'info', 'warn', 'error'], default='info', help="Set loglevel to see debug messages")
 
 	args = parser.parse_args()
@@ -560,12 +561,31 @@ def main():
 	# 1. Parse the devicetrees -- extract the device info (msm-id, board-id, pmic-id, oem-id)
 	logging.info('Parsing base dtb files from {}'.format(args.base))
 	bases = parse_dt_files(args.base)
+	project_ids = None
+	if args.target:
+		project_overlays = [dt for dt in bases if dt.filename.endswith('.dtbo') and dt.proj_id]
+		if project_overlays:
+			selected = [dt for dt in project_overlays
+				if os.path.basename(dt.filename).startswith(args.target + '-')]
+			if not selected:
+				parser.error(f'No Oplus base overlays found for {args.target!r}')
+			# Keep unqualified bases and use the overlay validation rule for the rest.
+			platform_bases = [dt for dt in bases if dt.filename.endswith('.dtb')]
+			compatible_bases = [dt for dt in platform_bases
+				if not dt.has_any_properties() or any(overlay > dt for overlay in selected)]
+			if platform_bases and not compatible_bases:
+				parser.error(f'No compatible base DTBs found for {args.target!r}')
+			project_ids = frozenset().union(*(dt.proj_id for dt in selected))
+			bases = compatible_bases + selected
 	all_bases = '\n'.join(list(map(lambda x: str(x), bases)))
 	logging.info('Parsed bases: \n{}'.format(all_bases))
 
 	logging.info('Parsing techpack dtb files from {}'.format(args.techpack))
 	techpacks = parse_dt_files(args.techpack)
 	techpacks.sort(key=lambda dt: (dt.proj_id is not None, dt.proj_id))
+	if project_ids is not None:
+		# A techpack can be shared or named after a different project with overlapping IDs.
+		techpacks = [dt for dt in techpacks if dt.proj_id is None or dt.proj_id & project_ids]
 	all_techpacks = '\n'.join(list(map(lambda x: str(x), techpacks)))
 	logging.info('Parsed techpacks: \n{}'.format(all_techpacks))
 
